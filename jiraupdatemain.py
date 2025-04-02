@@ -4,8 +4,7 @@ import sys
 import logging
 import os
 from jira_auth import get_auth_info
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill, Border, Side
+from openpyxl import load_workbook, styles
 
 # ロギング設定
 logging.basicConfig(
@@ -269,14 +268,14 @@ def format_excel_file(excel_path):
         ws = wb.active
         
         # 薄緑の背景色設定
-        fill = PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
+        fill = styles.PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
         
         # 罫線設定
-        border = Border(
-            left=Side(style='thin'),
-            right=Side(style='thin'),
-            top=Side(style='thin'),
-            bottom=Side(style='thin')
+        border = styles.Border(
+            left=styles.Side(style='thin'),
+            right=styles.Side(style='thin'),
+            top=styles.Side(style='thin'),
+            bottom=styles.Side(style='thin')
         )
         
         # 全セルに罫線を設定し、偶数行に背景色を設定
@@ -409,8 +408,9 @@ def sync_excel_and_jira(excel_path, project_key):
 
         # 既存のExcelファイルが存在する場合、ハイパーリンクとシートを保持した更新を行う
         if file_exists:
-            # 一時的な新しいファイル名
-            temp_file = excel_path + ".temp"
+            # 一時的な新しいファイル名（拡張子をexcelと同じにする）
+            file_path_without_ext = os.path.splitext(excel_path)[0]
+            temp_file = file_path_without_ext + "_tmp.xlsx"
             
             # まず新しいDataFrameを一時ファイルに保存
             df.to_excel(temp_file, index=False)
@@ -449,16 +449,49 @@ def sync_excel_and_jira(excel_path, project_key):
                 for row_idx, row in enumerate(sheet.rows, 1):
                     for col_idx, cell in enumerate(row, 1):
                         new_cell = new_sheet.cell(row=row_idx, column=col_idx)
+                        # セルの値をコピー
                         new_cell.value = cell.value
+                        # ハイパーリンクをコピー
                         if cell.hyperlink:
                             new_cell.hyperlink = cell.hyperlink
-                        if cell.has_style:
-                            new_cell.font = cell.font
-                            new_cell.border = cell.border
-                            new_cell.fill = cell.fill
+                        
+                        # スタイルのコピーは個別に行う（styleproxyはハッシュ化できないため）
+                        try:
+                            # フォント
+                            if cell.font:
+                                new_cell.font = styles.Font(
+                                    name=cell.font.name,
+                                    size=cell.font.size,
+                                    bold=cell.font.bold,
+                                    italic=cell.font.italic,
+                                    vertAlign=cell.font.vertAlign,
+                                    underline=cell.font.underline,
+                                    strike=cell.font.strike,
+                                    color=cell.font.color
+                                )
+                            # 罫線
+                            if cell.border:
+                                new_cell.border = styles.Border(
+                                    left=styles.Side(style=cell.border.left.style, color=cell.border.left.color) if cell.border.left else None,
+                                    right=styles.Side(style=cell.border.right.style, color=cell.border.right.color) if cell.border.right else None,
+                                    top=styles.Side(style=cell.border.top.style, color=cell.border.top.color) if cell.border.top else None,
+                                    bottom=styles.Side(style=cell.border.bottom.style, color=cell.border.bottom.color) if cell.border.bottom else None
+                                )
+                            # 塗りつぶし
+                            if cell.fill:
+                                new_cell.fill = styles.PatternFill(
+                                    fill_type=cell.fill.fill_type,
+                                    start_color=cell.fill.start_color,
+                                    end_color=cell.fill.end_color
+                                )
+                            # 数値書式
                             new_cell.number_format = cell.number_format
-                            new_cell.protection = cell.protection
-                            new_cell.alignment = cell.alignment
+                            # 配置
+                            if cell.alignment:
+                                new_cell.alignment = cell.alignment
+                        except Exception as style_error:
+                            logger.warning(f"セルスタイルのコピー中にエラー: {style_error}")
+                            # スタイルコピーのエラーは無視して続行
             
             # 更新された内容を元のファイル名で保存
             new_wb.save(excel_path)
