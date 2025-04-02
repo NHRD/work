@@ -263,11 +263,22 @@ def import_jira_tickets(jira_url, headers, project_key, df):
         logger.error(f"JIRAからのインポート・更新失敗: {str(e)}")
         return df, 0, 0
 
-# Excelの書式を設定する
+# 定数定義
+MAIN_SHEET_NAME = "main"  # メインシートの名前
+IMAGES_SHEET_NAME = "Imanges"  # 画像シートの名前（表記ゆれに対応）
+
+# Excelの書式を設定する（メインシートのみ）
 def format_excel_file(excel_path):
     try:
         wb = load_workbook(excel_path)
-        ws = wb.active
+        
+        # メインシートを対象とする
+        if MAIN_SHEET_NAME in wb.sheetnames:
+            ws = wb[MAIN_SHEET_NAME]
+        else:
+            # メインシート名が存在しない場合は最初のシートを使用
+            ws = wb.active
+            logger.warning(f"シート '{MAIN_SHEET_NAME}' が見つからないため、最初のシート '{ws.title}' に書式を適用します")
         
         # 薄緑の背景色設定
         fill = styles.PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
@@ -280,13 +291,16 @@ def format_excel_file(excel_path):
             bottom=styles.Side(style='thin')
         )
         
-        # 全セルに罫線を設定し、偶数行に背景色を設定
+        # 全セルに罫線を設定し、偶数行に背景色を設定（メインシートのみ）
         for row in range(1, ws.max_row + 1):
             for col in range(1, 10):  # A-I列
                 cell = ws.cell(row=row, column=col)
                 cell.border = border
                 if row % 2 == 0:  # 偶数行
                     cell.fill = fill
+        
+        # 他のシートには書式設定を適用しない
+        logger.info(f"シート '{ws.title}' のみに書式設定を適用しました")
                     
         wb.save(excel_path)
         logger.info("✓ Excel書式設定完了")
