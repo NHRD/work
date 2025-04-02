@@ -3,8 +3,10 @@ import requests
 import sys
 import logging
 import os
+import openpyxl
 from jira_auth import get_auth_info
 from openpyxl import load_workbook, styles
+from shutil import copy
 
 # ロギング設定
 logging.basicConfig(
@@ -411,6 +413,10 @@ def sync_excel_and_jira(excel_path, project_key):
             # 一時的な新しいファイル名（拡張子をexcelと同じにする）
             file_path_without_ext = os.path.splitext(excel_path)[0]
             temp_file = file_path_without_ext + "_tmp.xlsx"
+            backup_file = file_path_without_ext + "_backup.xlsx"
+            
+            # バックアップとして元のファイルをコピー（画像保持のため）
+            copy(excel_path, backup_file)
             
             # まず新しいDataFrameを一時ファイルに保存
             df.to_excel(temp_file, index=False)
@@ -435,69 +441,140 @@ def sync_excel_and_jira(excel_path, project_key):
                         if existing_sheet.cell(row=row, column=10).hyperlink:
                             new_sheet.cell(row=row, column=10).hyperlink = existing_sheet.cell(row=row, column=10).hyperlink
             
-            # 保存していた他のシートを新しいワークブックに追加
-            for sheet_name, sheet in other_sheets.items():
-                # すでに同名のシートがある場合は削除
-                if sheet_name in new_wb.sheetnames:
-                    std = new_wb[sheet_name]
-                    new_wb.remove(std)
-                
-                # シートを新しいワークブックにコピー
-                new_sheet = new_wb.create_sheet(title=sheet_name)
-                
-                # シートの内容をコピー
-                for row_idx, row in enumerate(sheet.rows, 1):
-                    for col_idx, cell in enumerate(row, 1):
-                        new_cell = new_sheet.cell(row=row_idx, column=col_idx)
-                        # セルの値をコピー
-                        new_cell.value = cell.value
-                        # ハイパーリンクをコピー
-                        if cell.hyperlink:
-                            new_cell.hyperlink = cell.hyperlink
-                        
-                        # スタイルのコピーは個別に行う（styleproxyはハッシュ化できないため）
-                        try:
-                            # フォント
-                            if cell.font:
-                                new_cell.font = styles.Font(
-                                    name=cell.font.name,
-                                    size=cell.font.size,
-                                    bold=cell.font.bold,
-                                    italic=cell.font.italic,
-                                    vertAlign=cell.font.vertAlign,
-                                    underline=cell.font.underline,
-                                    strike=cell.font.strike,
-                                    color=cell.font.color
-                                )
-                            # 罫線
-                            if cell.border:
-                                new_cell.border = styles.Border(
-                                    left=styles.Side(style=cell.border.left.style, color=cell.border.left.color) if cell.border.left else None,
-                                    right=styles.Side(style=cell.border.right.style, color=cell.border.right.color) if cell.border.right else None,
-                                    top=styles.Side(style=cell.border.top.style, color=cell.border.top.color) if cell.border.top else None,
-                                    bottom=styles.Side(style=cell.border.bottom.style, color=cell.border.bottom.color) if cell.border.bottom else None
-                                )
-                            # 塗りつぶし
-                            if cell.fill:
-                                new_cell.fill = styles.PatternFill(
-                                    fill_type=cell.fill.fill_type,
-                                    start_color=cell.fill.start_color,
-                                    end_color=cell.fill.end_color
-                                )
-                            # 数値書式
-                            new_cell.number_format = cell.number_format
-                            # 配置
-                            if cell.alignment:
-                                new_cell.alignment = cell.alignment
-                        except Exception as style_error:
-                            logger.warning(f"セルスタイルのコピー中にエラー: {style_error}")
-                            # スタイルコピーのエラーは無視して続行
-            
             # 更新された内容を元のファイル名で保存
             new_wb.save(excel_path)
             
-            # 一時ファイルを削除
-            os.remove(temp_file)
+            # 画像を含むシートがある場合は特別な処理
+            if any("Imanges" in sheet_name for sheet_name in other_sheets.keys()):
+                logger.info("画像を含むシートを検出しました。元のファイルを保持します。")
+                try:
+                    # バックアップから元のワークブックを読み込む
+                    original_wb = load_workbook(backup_file)
+                    # 新しく作成したワークブックを読み込む
+                    updated_wb = load_workbook(excel_path)
+                    
+                    # 最初のシート（メインシート）のデータを更新
+                    new_main_sheet = updated_wb.active
+                    original_main_sheet = original_wb.active
+                    
+                    # メインシートを削除して新しいものに置き換え
+                    main_sheet_name = original_wb.sheetnames[0]
+                    del original_wb[main_sheet_name]
+                    
+                    # シートをコピー
+                    original_wb.create_sheet(main_sheet_name, 0)
+                    replaced_sheet = original_wb[main_sheet_name]
+                    
+                    # セルの内容をコピー
+                    for row in range(1, new_main_sheet.max_row + 1):
+                        for col in range(1, new_main_sheet.max_column + 1):
+                            replaced_sheet.cell(row=row, column=col).value = new_main_sheet.cell(row=row, column=col).value
+                            
+                            # ハイパーリンクもコピー
+                            if new_main_sheet.cell(row=row, column=col).hyperlink:
+                                replaced_sheet.cell(row=row, column=col).hyperlink = new_main_sheet.cell(row=row, column=col).hyperlink
+                                
+                            # スタイルもコピー
+                            try:
+                                if new_main_sheet.cell(row=row, column=col).has_style:
+                                    replaced_sheet.cell(row=row, column=col).font = new_main_sheet.cell(row=row, column=col).font
+                                    replaced_sheet.cell(row=row, column=col).border = new_main_sheet.cell(row=row, column=col).border
+                                    replaced_sheet.cell(row=row, column=col).fill = new_main_sheet.cell(row=row, column=col).fill
+                                    replaced_sheet.cell(row=row, column=col).number_format = new_main_sheet.cell(row=row, column=col).number_format
+                                    replaced_sheet.cell(row=row, column=col).alignment = new_main_sheet.cell(row=row, column=col).alignment
+                            except Exception as style_error:
+                                logger.warning(f"メインシートスタイルのコピー中にエラー: {style_error}")
+                    
+                    # 元のファイルに保存
+                    original_wb.save(excel_path)
+                    logger.info(f"画像を保持したまま、メインシートを更新しました")
+                    
+                except Exception as e:
+                    logger.error(f"画像保持処理エラー: {str(e)}")
+                    logger.info("通常の保存処理にフォールバックします")
+                    
+                    # 通常の保存処理（画像は失われるがデータは保持される）
+                    df.to_excel(excel_path, index=False)
+                    format_excel_file(excel_path)
+            else:
+                # 保存していた他のシートを新しいワークブックに追加
+                for sheet_name, sheet in other_sheets.items():
+                    # すでに同名のシートがある場合は削除
+                    if sheet_name in new_wb.sheetnames:
+                        std = new_wb[sheet_name]
+                        new_wb.remove(std)
+                    
+                    # シートを新しいワークブックにコピー
+                    new_sheet = new_wb.create_sheet(title=sheet_name)
+                    
+                    # シートの内容をコピー
+                    for row_idx, row in enumerate(sheet.rows, 1):
+                        for col_idx, cell in enumerate(row, 1):
+                            new_cell = new_sheet.cell(row=row_idx, column=col_idx)
+                            # セルの値をコピー
+                            new_cell.value = cell.value
+                            # ハイパーリンクをコピー
+                            if cell.hyperlink:
+                                new_cell.hyperlink = cell.hyperlink
+                            
+                            # スタイルのコピーは個別に行う（styleproxyはハッシュ化できないため）
+                            try:
+                                # フォント
+                                if cell.font:
+                                    new_cell.font = styles.Font(
+                                        name=cell.font.name,
+                                        size=cell.font.size,
+                                        bold=cell.font.bold,
+                                        italic=cell.font.italic,
+                                        vertAlign=cell.font.vertAlign,
+                                        underline=cell.font.underline,
+                                        strike=cell.font.strike,
+                                        color=cell.font.color
+                                    )
+                                # 罫線
+                                if cell.border:
+                                    new_cell.border = styles.Border(
+                                        left=styles.Side(style=cell.border.left.style, color=cell.border.left.color) if cell.border.left else None,
+                                        right=styles.Side(style=cell.border.right.style, color=cell.border.right.color) if cell.border.right else None,
+                                        top=styles.Side(style=cell.border.top.style, color=cell.border.top.color) if cell.border.top else None,
+                                        bottom=styles.Side(style=cell.border.bottom.style, color=cell.border.bottom.color) if cell.border.bottom else None
+                                    )
+                                # 塗りつぶし
+                                if cell.fill:
+                                    new_cell.fill = styles.PatternFill(
+                                        fill_type=cell.fill.fill_type,
+                                        start_color=cell.fill.start_color,
+                                        end_color=cell.fill.end_color
+                                    )
+                                # 数値書式
+                                new_cell.number_format = cell.number_format
+                                # 配置
+                                if cell.alignment:
+                                    new_cell.alignment = cell.alignment
+                            except Exception as style_error:
+                                logger.warning(f"セルスタイルのコピー中にエラー: {style_error}")
+                                # スタイルコピーのエラーは無視して続行
+                    
+                    # 列の幅をコピー
+                    for col_idx, col in enumerate(sheet.columns, 1):
+                        letter = openpyxl.utils.get_column_letter(col_idx)
+                        if sheet.column_dimensions[letter].width is not None:
+                            new_sheet.column_dimensions[letter].width = sheet.column_dimensions[letter].width
+                    
+                    # 行の高さをコピー
+                    for row_idx in range(1, sheet.max_row + 1):
+                        if sheet.row_dimensions[row_idx].height is not None:
+                            new_sheet.row_dimensions[row_idx].height = sheet.row_dimensions[row_idx].height
+                
+                # 更新された内容を元のファイル名で保存
+                new_wb.save(excel_path)
+            
+            # 一時ファイルとバックアップを削除
+            try:
+                os.remove(temp_file)
+                os.remove(backup_file)
+            except Exception as e:
+                logger.warning(f"一時ファイル削除エラー: {str(e)}")
             
             # 書式の調整（メインシートのみ）
             format_excel_file(excel_path)
